@@ -1,0 +1,14 @@
+# Credenciales locales
+src/main/resources/db.properties
+db.properties
+
+
+# Archivos generados por Maven
+target/
+
+# Configuración local
+.env
+
+# Carpetas vacias de testeos
+test/
+
