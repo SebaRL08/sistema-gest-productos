@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gestión de productos</title>
+  <style>
+    :root { color-scheme: light; --blue:#2457d6; --ink:#182230; --muted:#667085; --line:#e5e9f0; --bg:#f5f7fb; }
+    * { box-sizing:border-box }
+    body { margin:0; font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink) }
+    header { background:#fff; border-bottom:1px solid var(--line); padding:22px max(20px,calc((100% - 1100px)/2)); }
+    header h1 { margin:0; font-size:1.5rem } header p { margin:5px 0 0; color:var(--muted) }
+    main { max-width:1100px; margin:28px auto; padding:0 18px; display:grid; gap:18px; grid-template-columns:320px 1fr }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:0 4px 16px #152a4a0a }
+    h2 { font-size:1.05rem; margin:0 0 16px }
+    label { display:block; font-size:.88rem; font-weight:650; margin:12px 0 5px }
+    input,textarea { width:100%; border:1px solid #ccd3df; border-radius:8px; padding:10px 11px; font:inherit; background:#fff }
+    textarea { min-height:76px; resize:vertical }
+    button { border:0; border-radius:8px; padding:10px 13px; font:inherit; font-weight:650; cursor:pointer }
+    .primary { background:var(--blue); color:#fff } .secondary { background:#eef2ff; color:#2446a8 } .danger { background:#fff0f0; color:#b42318 }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:16px }
+    .toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px }
+    .toolbar input { max-width:320px }
+    .table-wrap { overflow-x:auto } table { border-collapse:collapse; width:100%; min-width:620px }
+    th,td { padding:12px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
+    th { color:var(--muted); font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; background:#fafbfe }
+    td .actions { margin:0; flex-wrap:nowrap }
+    td button { padding:7px 9px; font-size:.84rem }
+    .status { color:var(--muted); font-size:.9rem; margin:10px 0 0; min-height:1.4em }
+    .empty { color:var(--muted); text-align:center; padding:30px 10px }
+    .hidden { display:none }
+    @media(max-width:800px) { main { grid-template-columns:1fr; margin-top:16px } header { padding:18px } .toolbar { align-items:stretch; flex-direction:column } .toolbar input { max-width:none } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Gestión de productos</h1>
+    <p>Inventario · Registrar, consultar, editar y eliminar productos</p>
+  </header>
+  <main>
+    <section class="panel">
+      <h2 id="form-title">Registrar producto</h2>
+      <form id="product-form">
+        <input id="product-id" type="hidden">
+        <label for="codigo">Código *</label><input id="codigo" maxlength="20" required>
+        <label for="nombre">Nombre *</label><input id="nombre" maxlength="100" required>
+        <label for="descripcion">Descripción</label><textarea id="descripcion"></textarea>
+        <label for="precio">Precio *</label><input id="precio" type="number" min="0" step="0.01" required>
+        <label for="cantidad">Cantidad *</label><input id="cantidad" type="number" min="0" step="1" required>
+        <div class="actions">
+          <button class="primary" type="submit" id="save-btn">Guardar producto</button>
+          <button class="secondary hidden" type="button" id="cancel-btn">Cancelar edición</button>
+        </div>
+        <p class="status" id="form-status" role="status"></p>
+      </form>
+    </section>
+    <section class="panel">
+      <div class="toolbar">
+        <div><h2 style="margin-bottom:4px">Inventario</h2><span id="count" class="status">0 productos</span></div>
+        <input id="search" type="search" placeholder="Buscar por código o nombre..." aria-label="Buscar productos">
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Código</th><th>Producto</th><th>Precio</th><th>Cantidad</th><th>Acciones</th></tr></thead>
+          <tbody id="products"><tr><td colspan="5" class="empty">Configura la conexión para cargar productos.</td></tr></tbody>
+        </table>
+      </div>
+      <p class="status" id="table-status" role="status"></p>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    // PASO DE CONFIGURACIÓN: pega aquí la URL y la clave publicable (anon) de tu proyecto Supabase.
+    const SUPABASE_URL = "https://buafvcsfbawtytkltsjk.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ1YWZ2Y3NmYmF3dHl0a2x0c2prIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI5MzE0NTAsImV4cCI6MjEwODUwNzQ1MH0.kLVhnyumV5t-gXbWZTJ0bDe0H9oLwp3oD7xgxaTPXi0";
+
+    let db = null;
+    const $ = id => document.getElementById(id);
+    const form = $("product-form");
+    const say = (id, message) => $(id).textContent = message;
+    const money = n => new Intl.NumberFormat("es-CO", {style:"currency",currency:"COP",maximumFractionDigits:2}).format(Number(n)||0);
+
+    function connect() {
+      if (!window.supabase) { say("table-status","No se pudo cargar el cliente de la base de datos. Revisa tu conexión a internet."); return false; }
+      if (SUPABASE_URL.startsWith("PEGA_") || SUPABASE_ANON_KEY.startsWith("PEGA_")) {
+        say("table-status","Falta configurar Supabase. Sigue los pasos del README.");
+        $("products").innerHTML = '<tr><td colspan="5" class="empty">Pendiente de configurar la base de datos en la nube.</td></tr>';
+        return false;
+      }
+      db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      return true;
+    }
+
+    async function loadProducts() {
+      if (!db) return;
+      say("table-status","Cargando...");
+      const {data,error} = await db.from("productos").select("codigo,nombre,descripcion,precio,cantidad").order("nombre");
+      if (error) { say("table-status","Error al cargar: "+error.message); return; }
+      const q = $("search").value.trim().toLowerCase();
+      const filtered = data.filter(p => String(p.codigo).toLowerCase().includes(q) || String(p.nombre).toLowerCase().includes(q));
+      $("count").textContent = `${filtered.length} de ${data.length} producto(s)`;
+      $("products").innerHTML = "";
+      if (!filtered.length) {
+        $("products").innerHTML = '<tr><td colspan="5" class="empty">No hay productos que mostrar.</td></tr>';
+      }
+      filtered.forEach(p => {
+        const tr = document.createElement("tr");
+        const values = [p.codigo,p.nombre,p.precio,p.cantidad];
+        values.forEach((value,i) => {
+          const td = document.createElement("td");
+          td.textContent = i===2 ? money(value) : String(value ?? "");
+          tr.appendChild(td);
+        });
+        const td = document.createElement("td");
+        const actions = document.createElement("div"); actions.className="actions";
+        const edit = document.createElement("button"); edit.className="secondary"; edit.textContent="Editar"; edit.onclick=()=>editProduct(p);
+        const del = document.createElement("button"); del.className="danger"; del.textContent="Eliminar"; del.onclick=()=>deleteProduct(p.codigo);
+        actions.append(edit,del); td.appendChild(actions); tr.appendChild(td); $("products").appendChild(tr);
+      });
+      say("table-status","");
+    }
+
+    function editProduct(p) {
+      $("product-id").value=p.codigo;
+      $("codigo").value=p.codigo; $("codigo").readOnly=true;
+      $("nombre").value=p.nombre; $("descripcion").value=p.descripcion||"";
+      $("precio").value=p.precio; $("cantidad").value=p.cantidad;
+      $("form-title").textContent="Editar producto";
+      $("save-btn").textContent="Guardar cambios";
+      $("cancel-btn").classList.remove("hidden");
+      window.scrollTo({top:0,behavior:"smooth"});
+    }
+    function resetForm() {
+      form.reset(); $("product-id").value=""; $("codigo").readOnly=false;
+      $("form-title").textContent="Registrar producto"; $("save-btn").textContent="Guardar producto";
+      $("cancel-btn").classList.add("hidden"); say("form-status","");
+    }
+    $("cancel-btn").onclick=resetForm;
+    $("search").addEventListener("input",loadProducts);
+    form.addEventListener("submit", async e => {
+      e.preventDefault(); if(!db) return;
+      const codigo=$("codigo").value.trim(), nombre=$("nombre").value.trim();
+      const precio=Number($("precio").value), cantidad=Number($("cantidad").value);
+      if(!codigo||!nombre||!Number.isFinite(precio)||precio<0||!Number.isInteger(cantidad)||cantidad<0) {
+        say("form-status","Revisa los campos: precio y cantidad no pueden ser negativos; cantidad debe ser entera."); return;
+      }
+      const p={codigo,nombre,descripcion:$("descripcion").value.trim(),precio,cantidad};
+      say("form-status","Guardando...");
+      const editing=Boolean($("product-id").value);
+      const result=editing ? await db.from("productos").update(p).eq("codigo",$("product-id").value) : await db.from("productos").insert(p);
+      if(result.error) { say("form-status","No se pudo guardar: "+result.error.message); return; }
+      resetForm(); say("form-status",editing?"Cambios guardados.":"Producto registrado."); await loadProducts();
+    });
+    async function deleteProduct(codigo) {
+      if(!confirm(`¿Eliminar el producto ${codigo}?`)) return;
+      const {error}=await db.from("productos").delete().eq("codigo",codigo);
+      if(error) { say("table-status","No se pudo eliminar: "+error.message); return; }
+      await loadProducts();
+    }
+    if(connect()) loadProducts();
+  </script>
+</body>
+</html>
